@@ -6,7 +6,6 @@ app.use(express.json());
 
 /**
  * LOGGER (ver cada llamada que llega al servidor)
- * Pégalo aquí: justo después de app = express() y antes de tus rutas.
  */
 app.use((req, res, next) => {
   const start = Date.now();
@@ -24,13 +23,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
+// Root: redirige a /sse para que ElevenLabs entre al SSE si solo prueba la URL base
 app.get("/", (req, res) => {
-  res.send("MCP Google server activo");
+  res.redirect(302, "/sse");
 });
 
 /**
- * MCP over SSE (mínimo para que ElevenLabs conecte)
+ * MCP over SSE (mínimo)
  * - GET  /sse       -> abre canal SSE
  * - POST /messages  -> recibe mensajes
  */
@@ -44,7 +43,7 @@ app.get("/sse", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  // Enviamos un evento inicial
+  // Evento inicial
   res.write(`event: ready\n`);
   res.write(`data: {"ok":true,"message":"SSE conectado"}\n\n`);
 
@@ -57,7 +56,6 @@ app.get("/sse", (req, res) => {
 });
 
 app.post("/messages", (req, res) => {
-  // Por ahora solo hacemos “echo” al canal SSE
   const payload = req.body || {};
 
   // Emitimos a todos los clientes SSE conectados
