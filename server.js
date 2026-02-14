@@ -26,14 +26,17 @@ function getBaseUrl(req) {
 }
 
 /**
- * MCP over SSE (mínimo para que el cliente sepa:
- * 1) que hay SSE
- * 2) a qué URL enviar POST /messages
+ * MCP over SSE:
+ * - GET /      -> OK rápido (para que "Probar conexión" no se quede cargando)
+ * - GET /sse   -> abre canal SSE
+ * - POST /messages -> recibe mensajes JSON-RPC
  */
 
 let clients = [];
 
 function startSSE(req, res) {
+  console.log("[SSE] conectado", req.headers["user-agent"] || "-");
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -41,13 +44,13 @@ function startSSE(req, res) {
 
   const baseUrl = getBaseUrl(req);
 
-  // IMPORTANTE: decirle al cliente a dónde mandar los mensajes
- res.write(`event: endpoint\n`);
- res.write(`data: ${baseUrl}/messages\n\n`);
+  // IMPORTANTE: endpoint en texto plano (no JSON)
+  res.write(`event: endpoint\n`);
+  res.write(`data: ${baseUrl}/messages\n\n`);
 
-  // Evento inicial (solo informativo)
+  // Evento inicial (informativo)
   res.write(`event: ready\n`);
-  res.write(`data: ${JSON.stringify({ ok: true, message: "SSE conectado" })}\n\n`);
+  res.write(`data: {"ok":true,"message":"SSE conectado"}\n\n`);
 
   const clientId = Date.now();
   clients.push({ id: clientId, res });
@@ -57,43 +60,40 @@ function startSSE(req, res) {
   });
 }
 
-// / es SSE directo (porque ElevenLabs suele probar solo la base)
-app.get("/", (req, res) => startSSE(req, res));
-// mantenemos /sse por si acaso
+// 1) / debe responder rápido (para el botón "Probar conexión")
+app.get("/", (req, res) => {
+  res.status(200).send("OK (MCP server activo). Usa /sse para SSE.");
+});
+
+// 2) SSE real aquí
 app.get("/sse", (req, res) => startSSE(req, res));
 
-// Endpoint de salud para probar sin SSE (opcional pero útil)
+// Endpoint de salud opcional
 app.get("/health", (req, res) => {
   res.send("OK");
 });
 
 /**
- * POST /messages: aquí llegan los mensajes (JSON-RPC)
- * Implementación mínima para que el cliente pueda:
- * - pedir lista de herramientas
- * - llamar a una herramienta de prueba
+ * POST /messages: JSON-RPC mínimo
  */
 app.post("/messages", (req, res) => {
   const msg = req.body;
 
-  // Log del cuerpo (para ver qué envía ElevenLabs)
   console.log("[MCP] incoming:", JSON.stringify(msg));
 
-  // Si llega algo raro o vacío
   if (!msg || typeof msg !== "object") {
     return res.status(400).json({ error: "Invalid JSON" });
   }
 
-  const { jsonrpc, id, method, params } = msg;
+  const { id, method, params } = msg;
 
-  // Respuesta helper
   const reply = (result) => res.json({ jsonrpc: "2.0", id, result });
   const fail = (code, message) =>
     res.json({ jsonrpc: "2.0", id, error: { code, message } });
 
-  // Métodos mínimos
   if (method === "initialize") {
     return reply({
+      protocolVersion: params?.protocolVersion || "2025-03-26",
       serverInfo: { name: "eleven-mcp-google", version: "1.0.0" },
       capabilities: { tools: {} },
     });
@@ -123,9 +123,7 @@ app.post("/messages", (req, res) => {
     if (name === "ping") {
       const text = args.text ? String(args.text) : "";
       return reply({
-        content: [
-          { type: "text", text: `pong ${text}`.trim() },
-        ],
+        content: [{ type: "text", text: `pong ${text}`.trim() }],
       });
     }
 
@@ -136,5 +134,5 @@ app.post("/messages", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v3 ENDPOINT+TOOLS iniciado");
+  console.log("SERVIDOR MCP v4 / OK + /sse SSE + tools iniciado");
 });
