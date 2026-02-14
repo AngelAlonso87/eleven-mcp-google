@@ -42,8 +42,8 @@ function startSSE(req, res) {
   const baseUrl = getBaseUrl(req);
 
   // IMPORTANTE: decirle al cliente a dónde mandar los mensajes
-  res.write(`event: endpoint\n`);
-  res.write(`data: ${JSON.stringify({ uri: `${baseUrl}/messages` })}\n\n`);
+ res.write(`event: endpoint\n`);
+ res.write(`data: ${baseUrl}/messages\n\n`);
 
   // Evento inicial (solo informativo)
   res.write(`event: ready\n`);
