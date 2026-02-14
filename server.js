@@ -18,133 +18,91 @@ app.use((req, res, next) => {
   next();
 });
 
-// URL pública (para construir el endpoint correcto)
+// URL pública
 function getBaseUrl(req) {
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   return process.env.PUBLIC_URL || `${proto}://${host}`;
 }
 
-/**
- * MCP over SSE:
- * - GET /      -> OK rápido (botón "Probar conexión")
- * - GET /sse   -> abre canal SSE
- * - POST /messages -> JSON-RPC MCP
- */
-
 let clients = [];
 
 function startSSE(req, res) {
-  console.log("[SSE] conectado", req.headers["user-agent"] || "-");
+  const ua = req.headers["user-agent"] || "-";
+  console.log("[SSE] conectado", ua);
 
   res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   const baseUrl = getBaseUrl(req);
 
-  // Endpoint en texto plano
+  // 1) endpoint en texto plano
   res.write(`event: endpoint\n`);
   res.write(`data: ${baseUrl}/messages\n\n`);
 
-  // Evento inicial (informativo)
+  // 2) ready
   res.write(`event: ready\n`);
   res.write(`data: {"ok":true,"message":"SSE conectado"}\n\n`);
 
-  const clientId = Date.now();
-  clients.push({ id: clientId, res });
-
-  // Mantener vivo el SSE (evita que proxies lo corten)
+  // Mantener vivo
   const keepAlive = setInterval(() => {
     try {
-      res.write(`event: ping\n`);
-      res.write(`data: {}\n\n`);
-    } catch (e) {
-      // si el stream ya está cerrado, el close limpiará
-    }
-  }, 25000);
+      res.write(`: ping\n\n`);
+    } catch (e) {}
+  }, 15000);
+
+  const clientId = Date.now();
+  clients.push({ id: clientId, res, keepAlive });
 
   req.on("close", () => {
     clearInterval(keepAlive);
     clients = clients.filter((c) => c.id !== clientId);
+    console.log("[SSE] desconectado", ua);
   });
 }
 
-// 1) / responde rápido
-app.get("/", (req, res) => {
-  res.status(200).send("OK (MCP server activo). Usa /sse para SSE.");
-});
+// ✅ IMPORTANTE: / también abre SSE (porque ElevenLabs parece probar aquí)
+app.get("/", (req, res) => startSSE(req, res));
 
-// 2) SSE real
+// /sse también abre SSE
 app.get("/sse", (req, res) => startSSE(req, res));
 
-// Health opcional
-app.get("/health", (req, res) => {
-  res.send("OK");
-});
+// health para pruebas humanas (opcional)
+app.get("/health", (req, res) => res.status(200).send("OK"));
 
-// Helper: enviar a SSE a todos los conectados (debug)
-function broadcast(eventName, payload) {
-  for (const c of clients) {
-    c.res.write(`event: ${eventName}\n`);
-    c.res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  }
-}
-
-/**
- * POST /messages: JSON-RPC mínimo compatible con MCP
- */
 app.post("/messages", (req, res) => {
   const body = req.body;
-
-  // Soportar batch (array) o single (objeto)
   const messages = Array.isArray(body) ? body : [body];
-
   const responses = [];
 
   for (const msg of messages) {
     console.log("[MCP] incoming:", JSON.stringify(msg));
 
-    if (!msg || typeof msg !== "object") {
-      // si es batch y un item viene mal, respondemos error solo para ese
-      responses.push({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32700, message: "Parse error / Invalid JSON" },
-      });
-      continue;
-    }
+    if (!msg || typeof msg !== "object") continue;
 
     const { id, method, params } = msg;
 
-    // Notificación (sin id) => NO responder con JSON (muy importante)
+    // Notifications (sin id) -> 204
     if (id === undefined || id === null) {
-      if (method === "initialized") {
-        // el cliente avisa que terminó el init
-        // no hay respuesta
-        continue;
-      }
-      // otras notificaciones: ignorar
-      continue;
+      return res.status(204).end();
     }
 
     const reply = (result) => responses.push({ jsonrpc: "2.0", id, result });
     const fail = (code, message) =>
       responses.push({ jsonrpc: "2.0", id, error: { code, message } });
 
-    // initialize
     if (method === "initialize") {
       reply({
         protocolVersion: params?.protocolVersion || "2025-03-26",
         serverInfo: { name: "eleven-mcp-google", version: "1.0.0" },
-        // IMPORTANTE: tools con listChanged suele ayudar a que el cliente haga tools/list
         capabilities: { tools: { listChanged: true } },
       });
       continue;
     }
 
-    // tools/list (slash) o tools.list (punto)
     if (method === "tools/list" || method === "tools.list") {
       reply({
         tools: [
@@ -153,9 +111,7 @@ app.post("/messages", (req, res) => {
             description: "Herramienta de prueba: responde pong.",
             inputSchema: {
               type: "object",
-              properties: {
-                text: { type: "string", description: "Texto opcional" },
-              },
+              properties: { text: { type: "string" } },
               additionalProperties: false,
             },
           },
@@ -164,22 +120,14 @@ app.post("/messages", (req, res) => {
       continue;
     }
 
-    // tools/call (slash) o tools.call (punto)
     if (method === "tools/call" || method === "tools.call") {
       const name = params?.name;
       const args = params?.arguments || {};
-
       if (name === "ping") {
         const text = args.text ? String(args.text) : "";
-        const out = `pong${text ? " " + text : ""}`;
-        reply({ content: [{ type: "text", text: out }] });
-
-        // debug por SSE (opcional)
-        broadcast("tool_used", { tool: "ping", args, out });
-
+        reply({ content: [{ type: "text", text: `pong ${text}`.trim() }] });
         continue;
       }
-
       fail(-32601, "Tool not found");
       continue;
     }
@@ -187,20 +135,11 @@ app.post("/messages", (req, res) => {
     fail(-32601, "Method not found");
   }
 
-  // Si era todo notificaciones (sin id), devolvemos 204
-  if (responses.length === 0) {
-    return res.status(204).end();
-  }
-
-  // Si el request original era batch, respondemos batch
-  if (Array.isArray(body)) {
-    return res.json(responses);
-  }
-
-  // Si era single, devolvemos el primer response
+  if (responses.length === 0) return res.status(204).end();
+  if (Array.isArray(body)) return res.json(responses);
   return res.json(responses[0]);
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v6 (initialized + keepalive + batch) iniciado");
+  console.log("SERVIDOR MCP v9 / y /sse como SSE + tools iniciado");
 });
