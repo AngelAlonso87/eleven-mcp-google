@@ -18,7 +18,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// URL pública (para construir el endpoint correcto)
+// URL pública
 function getBaseUrl(req) {
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host = req.headers["x-forwarded-host"] || req.headers.host;
@@ -35,16 +35,23 @@ function getBaseUrl(req) {
 let clients = [];
 
 function startSSE(req, res) {
-  console.log("[SSE] conectado", req.headers["user-agent"] || "-");
+  const ua = req.headers["user-agent"] || "-";
+  console.log("[SSE] conectado", ua);
 
+  // Headers SSE
   res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  // Evita buffering en algunos proxys
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
+
+  // Mantener vivo el socket
+  req.socket?.setKeepAlive?.(true);
 
   const baseUrl = getBaseUrl(req);
 
-  // Endpoint en texto plano
+  // Decirle a ElevenLabs dónde postear mensajes
   res.write(`event: endpoint\n`);
   res.write(`data: ${baseUrl}/messages\n\n`);
 
@@ -52,11 +59,22 @@ function startSSE(req, res) {
   res.write(`event: ready\n`);
   res.write(`data: {"ok":true,"message":"SSE conectado"}\n\n`);
 
+  // ✅ LATIDO: cada 15s mandamos un comentario SSE para que no se corte
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`: ping\n\n`); // comentario SSE (no es evento)
+    } catch (e) {
+      // si falla, se limpiará en close
+    }
+  }, 15000);
+
   const clientId = Date.now();
-  clients.push({ id: clientId, res });
+  clients.push({ id: clientId, res, heartbeat });
 
   req.on("close", () => {
+    clearInterval(heartbeat);
     clients = clients.filter((c) => c.id !== clientId);
+    console.log("[SSE] desconectado", ua);
   });
 }
 
@@ -65,7 +83,7 @@ app.get("/", (req, res) => {
   res.status(200).send("OK (MCP server activo). Usa /sse para SSE.");
 });
 
-// SSE
+// SSE real
 app.get("/sse", (req, res) => startSSE(req, res));
 
 // health
@@ -86,15 +104,13 @@ app.post("/messages", (req, res) => {
   }
 
   const { id, method, params } = msg;
-
-  // Si NO hay id -> es "notification" (no espera respuesta)
   const isNotification = typeof id === "undefined" || id === null;
 
   const reply = (result) => res.json({ jsonrpc: "2.0", id, result });
   const fail = (code, message) =>
     res.json({ jsonrpc: "2.0", id, error: { code, message } });
 
-  // ✅ Aceptar notifications típicas (esto evita bloqueos)
+  // ✅ Notifications típicas: no deben bloquear nada
   if (method === "notifications/initialized" || method === "notifications.initialized") {
     console.log("[MCP] notification: initialized");
     return res.status(204).end();
@@ -103,28 +119,24 @@ app.post("/messages", (req, res) => {
     console.log("[MCP] notification: cancelled");
     return res.status(204).end();
   }
-
-  // Si es notification y no la conocemos, no rompemos: 204
   if (isNotification) {
     console.log("[MCP] notification desconocida:", method);
     return res.status(204).end();
   }
 
-  // ✅ initialize (cambio clave: listChanged true)
+  // ✅ initialize: anunciar tools
   if (method === "initialize") {
     return reply({
       protocolVersion: params?.protocolVersion || "2025-03-26",
       serverInfo: { name: "eleven-mcp-google", version: "1.0.0" },
       capabilities: {
-        tools: {
-          listChanged: true,
-        },
+        tools: { listChanged: true },
       },
     });
   }
 
-  // tools/list (slash)
-  if (method === "tools/list") {
+  // tools/list (slash y punto)
+  if (method === "tools/list" || method === "tools.list") {
     return reply({
       tools: [
         {
@@ -141,26 +153,8 @@ app.post("/messages", (req, res) => {
     });
   }
 
-  // tools.list (punto)
-  if (method === "tools.list") {
-    return reply({
-      tools: [
-        {
-          name: "ping",
-          description: "Herramienta de prueba: responde pong.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              text: { type: "string", description: "Texto opcional" },
-            },
-          },
-        },
-      ],
-    });
-  }
-
-  // tools/call (slash)
-  if (method === "tools/call") {
+  // tools/call (slash y punto)
+  if (method === "tools/call" || method === "tools.call") {
     const name = params?.name;
     const args = params?.arguments || {};
 
@@ -170,22 +164,6 @@ app.post("/messages", (req, res) => {
         content: [{ type: "text", text: `pong ${text}`.trim() }],
       });
     }
-
-    return fail(-32601, "Tool not found");
-  }
-
-  // tools.call (punto)
-  if (method === "tools.call") {
-    const name = params?.name;
-    const args = params?.arguments || {};
-
-    if (name === "ping") {
-      const text = args.text ? String(args.text) : "";
-      return reply({
-        content: [{ type: "text", text: `pong ${text}`.trim() }],
-      });
-    }
-
     return fail(-32601, "Tool not found");
   }
 
@@ -193,5 +171,5 @@ app.post("/messages", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v7 notifications + tools iniciado");
+  console.log("SERVIDOR MCP v8 SSE heartbeat + notifications + tools iniciado");
 });
