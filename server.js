@@ -18,7 +18,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// URL pública
 function getBaseUrl(req) {
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host = req.headers["x-forwarded-host"] || req.headers.host;
@@ -39,15 +38,12 @@ function startSSE(req, res) {
 
   const baseUrl = getBaseUrl(req);
 
-  // 1) endpoint en texto plano
   res.write(`event: endpoint\n`);
   res.write(`data: ${baseUrl}/messages\n\n`);
 
-  // 2) ready
   res.write(`event: ready\n`);
   res.write(`data: {"ok":true,"message":"SSE conectado"}\n\n`);
 
-  // Mantener vivo
   const keepAlive = setInterval(() => {
     try {
       res.write(`: ping\n\n`);
@@ -64,31 +60,35 @@ function startSSE(req, res) {
   });
 }
 
-// ✅ IMPORTANTE: / también abre SSE (porque ElevenLabs parece probar aquí)
+// SSE tanto en / como en /sse
 app.get("/", (req, res) => startSSE(req, res));
-
-// /sse también abre SSE
 app.get("/sse", (req, res) => startSSE(req, res));
-
-// health para pruebas humanas (opcional)
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 app.post("/messages", (req, res) => {
   const body = req.body;
   const messages = Array.isArray(body) ? body : [body];
+
   const responses = [];
+  let sawOnlyNotifications = true;
 
   for (const msg of messages) {
     console.log("[MCP] incoming:", JSON.stringify(msg));
 
-    if (!msg || typeof msg !== "object") continue;
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
 
     const { id, method, params } = msg;
 
-    // Notifications (sin id) -> 204
+    // Notificación (sin id): NO respondemos por cada una.
     if (id === undefined || id === null) {
-      return res.status(204).end();
+      // aceptamos initialized y cualquiera sin romper
+      continue;
     }
+
+    // Si hay id, NO es solo notificación
+    sawOnlyNotifications = false;
 
     const reply = (result) => responses.push({ jsonrpc: "2.0", id, result });
     const fail = (code, message) =>
@@ -135,11 +135,16 @@ app.post("/messages", (req, res) => {
     fail(-32601, "Method not found");
   }
 
-  if (responses.length === 0) return res.status(204).end();
+  // Si SOLO hubo notificaciones
+  if (sawOnlyNotifications) {
+    return res.status(204).end();
+  }
+
+  // Si era batch, devolvemos batch; si no, devolvemos single
   if (Array.isArray(body)) return res.json(responses);
-  return res.json(responses[0]);
+  return res.json(responses[0] || { jsonrpc: "2.0", id: null, result: {} });
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v9 / y /sse como SSE + tools iniciado");
+  console.log("SERVIDOR MCP v10 batch-safe + SSE root iniciado");
 });
