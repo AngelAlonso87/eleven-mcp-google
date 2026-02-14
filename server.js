@@ -27,9 +27,9 @@ function getBaseUrl(req) {
 
 /**
  * MCP over SSE:
- * - GET /      -> OK rápido (para que "Probar conexión" no se quede cargando)
- * - GET /sse   -> abre canal SSE
- * - POST /messages -> recibe mensajes JSON-RPC
+ * - GET /      -> OK rápido
+ * - GET /sse   -> SSE
+ * - POST /messages -> JSON-RPC
  */
 
 let clients = [];
@@ -44,11 +44,11 @@ function startSSE(req, res) {
 
   const baseUrl = getBaseUrl(req);
 
-  // IMPORTANTE: endpoint en texto plano (no JSON)
+  // Endpoint en texto plano
   res.write(`event: endpoint\n`);
   res.write(`data: ${baseUrl}/messages\n\n`);
 
-  // Evento inicial (informativo)
+  // Evento inicial
   res.write(`event: ready\n`);
   res.write(`data: {"ok":true,"message":"SSE conectado"}\n\n`);
 
@@ -60,23 +60,21 @@ function startSSE(req, res) {
   });
 }
 
-// 1) / debe responder rápido (para el botón "Probar conexión")
+// / rápido
 app.get("/", (req, res) => {
   res.status(200).send("OK (MCP server activo). Usa /sse para SSE.");
 });
 
-// 2) SSE real aquí
+// SSE
 app.get("/sse", (req, res) => startSSE(req, res));
 
-// Endpoint de salud opcional
+// health
 app.get("/health", (req, res) => {
   res.send("OK");
 });
 
 /**
- * POST /messages: JSON-RPC mínimo
- * Añadimos compatibilidad extra:
- * - tools.list y tools.call (algunos clientes usan punto en vez de /)
+ * POST /messages: JSON-RPC
  */
 app.post("/messages", (req, res) => {
   const msg = req.body;
@@ -89,11 +87,30 @@ app.post("/messages", (req, res) => {
 
   const { id, method, params } = msg;
 
+  // Si NO hay id -> es "notification" (no espera respuesta)
+  const isNotification = typeof id === "undefined" || id === null;
+
   const reply = (result) => res.json({ jsonrpc: "2.0", id, result });
   const fail = (code, message) =>
     res.json({ jsonrpc: "2.0", id, error: { code, message } });
 
-  // ✅ CAMBIO CLAVE: capabilities.tools con listChanged:true
+  // ✅ Aceptar notifications típicas (esto evita bloqueos)
+  if (method === "notifications/initialized" || method === "notifications.initialized") {
+    console.log("[MCP] notification: initialized");
+    return res.status(204).end();
+  }
+  if (method === "notifications/cancelled" || method === "notifications.cancelled") {
+    console.log("[MCP] notification: cancelled");
+    return res.status(204).end();
+  }
+
+  // Si es notification y no la conocemos, no rompemos: 204
+  if (isNotification) {
+    console.log("[MCP] notification desconocida:", method);
+    return res.status(204).end();
+  }
+
+  // ✅ initialize (cambio clave: listChanged true)
   if (method === "initialize") {
     return reply({
       protocolVersion: params?.protocolVersion || "2025-03-26",
@@ -176,5 +193,5 @@ app.post("/messages", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v6 init listChanged + compat tools.* iniciado");
+  console.log("SERVIDOR MCP v7 notifications + tools iniciado");
 });
