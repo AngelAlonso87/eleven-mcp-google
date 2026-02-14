@@ -93,11 +93,16 @@ app.post("/messages", (req, res) => {
   const fail = (code, message) =>
     res.json({ jsonrpc: "2.0", id, error: { code, message } });
 
+  // ✅ CAMBIO CLAVE: capabilities.tools con listChanged:true
   if (method === "initialize") {
     return reply({
       protocolVersion: params?.protocolVersion || "2025-03-26",
       serverInfo: { name: "eleven-mcp-google", version: "1.0.0" },
-      capabilities: { tools: {} },
+      capabilities: {
+        tools: {
+          listChanged: true,
+        },
+      },
     });
   }
 
@@ -171,5 +176,5 @@ app.post("/messages", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v5 compat tools.list/tools.call iniciado");
+  console.log("SERVIDOR MCP v6 init listChanged + compat tools.* iniciado");
 });
