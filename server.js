@@ -86,8 +86,14 @@ app.get("/mcp", (req, res) => {
 
   const baseUrl = getBaseUrl(req);
 
-  // ✅ Mensaje simple estándar: “aquí se mandan mensajes”
+  // ✅ CAMBIO: añadimos endpoint + data JSON + ready (compatibilidad máxima)
+  res.write(`event: endpoint\n`);
+  res.write(`data: ${baseUrl}/mcp\n\n`);
+
   res.write(`data: ${JSON.stringify({ messages: `${baseUrl}/mcp` })}\n\n`);
+
+  res.write(`event: ready\n`);
+  res.write(`data: {"ok":true}\n\n`);
 
   const keepAlive = setInterval(() => {
     try {
@@ -126,7 +132,6 @@ function handleRpc(req, res, sourceName) {
       responses.push({ jsonrpc: "2.0", id, error: { code, message } });
 
     if (method === "initialize") {
-      // Si no trae sesión, creamos una (por compatibilidad)
       const newSessionId = crypto.randomUUID();
       sessions.set(newSessionId, { createdAt: Date.now() });
 
@@ -189,5 +194,5 @@ app.get("/", (req, res) => res.status(200).send("OK"));
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v12 (todo -> /mcp, /messages alias, SSE estable) iniciado");
+  console.log("SERVIDOR MCP v13 (SSE /mcp endpoint+data+ready) iniciado");
 });
