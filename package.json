@@ -1,0 +1,14 @@
+{
+  "name": "once-mcp-google",
+  "version": "1.0.0",
+  "description": "MCP server for ElevenLabs + Google",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "googleapis": "^132.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
