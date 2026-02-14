@@ -63,5 +63,5 @@ app.post("/messages", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("Servidor MCP (SSE) iniciado");
+  console.log("SERVIDOR MCP v2 SIN REDIRECT iniciado");
 });
