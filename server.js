@@ -4,40 +4,30 @@ const express = require("express");
 const app = express();
 app.use(express.json());
 
-/**
- * LOGGER (ver cada llamada que llega al servidor)
- */
+// LOGGER
 app.use((req, res, next) => {
   const start = Date.now();
-
   res.on("finish", () => {
     const ms = Date.now() - start;
-
     console.log(
       `[REQ] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${ms}ms)` +
         ` IP=${req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "-"}` +
         ` UA=${req.headers["user-agent"] || "-"}`
     );
   });
-
   next();
-});
-
-// Root: redirige a /sse para que ElevenLabs entre al SSE si solo prueba la URL base
-app.get("/", (req, res) => {
-  res.redirect(302, "/sse");
 });
 
 /**
  * MCP over SSE (mínimo)
- * - GET  /sse       -> abre canal SSE
- * - POST /messages  -> recibe mensajes
+ * - GET /      -> SSE (por si ElevenLabs solo prueba la base)
+ * - GET /sse   -> SSE
+ * - POST /messages -> recibe mensajes
  */
 
 let clients = [];
 
-app.get("/sse", (req, res) => {
-  // Headers SSE
+function startSSE(req, res) {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -53,12 +43,17 @@ app.get("/sse", (req, res) => {
   req.on("close", () => {
     clients = clients.filter((c) => c.id !== clientId);
   });
-});
+}
+
+// ElevenLabs suele probar solo la base: lo hacemos SSE directo
+app.get("/", (req, res) => startSSE(req, res));
+
+// También mantenemos /sse
+app.get("/sse", (req, res) => startSSE(req, res));
 
 app.post("/messages", (req, res) => {
   const payload = req.body || {};
 
-  // Emitimos a todos los clientes SSE conectados
   for (const c of clients) {
     c.res.write(`event: message\n`);
     c.res.write(`data: ${JSON.stringify(payload)}\n\n`);
