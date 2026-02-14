@@ -75,6 +75,8 @@ app.get("/health", (req, res) => {
 
 /**
  * POST /messages: JSON-RPC mínimo
+ * Añadimos compatibilidad extra:
+ * - tools.list y tools.call (algunos clientes usan punto en vez de /)
  */
 app.post("/messages", (req, res) => {
   const msg = req.body;
@@ -99,6 +101,7 @@ app.post("/messages", (req, res) => {
     });
   }
 
+  // tools/list (slash)
   if (method === "tools/list") {
     return reply({
       tools: [
@@ -116,7 +119,41 @@ app.post("/messages", (req, res) => {
     });
   }
 
+  // tools.list (punto)
+  if (method === "tools.list") {
+    return reply({
+      tools: [
+        {
+          name: "ping",
+          description: "Herramienta de prueba: responde pong.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "Texto opcional" },
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  // tools/call (slash)
   if (method === "tools/call") {
+    const name = params?.name;
+    const args = params?.arguments || {};
+
+    if (name === "ping") {
+      const text = args.text ? String(args.text) : "";
+      return reply({
+        content: [{ type: "text", text: `pong ${text}`.trim() }],
+      });
+    }
+
+    return fail(-32601, "Tool not found");
+  }
+
+  // tools.call (punto)
+  if (method === "tools.call") {
     const name = params?.name;
     const args = params?.arguments || {};
 
@@ -134,5 +171,5 @@ app.post("/messages", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVIDOR MCP v4 / OK + /sse SSE + tools iniciado");
+  console.log("SERVIDOR MCP v5 compat tools.list/tools.call iniciado");
 });
